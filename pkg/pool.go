@@ -55,7 +55,7 @@ const (
 )
 
 type SubnetRequest struct {
-	Subnet string // desired subnet if any
+	Subnet string // desired subnet if any (or subnet to be freed)
 	Type   NetworkType
 }
 
@@ -76,8 +76,7 @@ type SubnetKey string
 // carved into smaller ranges for use by individual networks. In the above
 // example, all private networks will use the 192.168.0.0/16 subnet.
 // In the future, we may support multiple prefixes/subnets per pool.
-// e.g. 192.168.0.0/16, 10.0.0.0/8 ... thus the SubnetKey is defined and
-// a map is used inside the Pool object.
+// e.g. 192.168.0.0/16, 10.0.0.0/8 ...
 type SubnetData struct {
 	Prefix           net.IP
 	PrefixBitsLength int
@@ -89,14 +88,11 @@ type SubnetData struct {
 
 type Pool struct {
 	// Unique fully qualified name of the Network Pool
-	FQN  *fqn.FQN `json:""`
-	Name string   `json:""`
-	UUID string   `json:""`
-	Type PoolType
-
-	Subnets map[SubnetKey]*SubnetData `json:""`
-	// default SubnetKey; if > 1 subnets are specified, we need a default one
-	defaultSubnet SubnetKey `json:""`
+	FQN     *fqn.FQN `json:""`
+	Name    string   `json:""`
+	UUID    string   `json:""`
+	Type    PoolType
+	Subnets *SubnetData `json:""`
 	// Networks associated with this Pool
 	// Networks map[string]NetworkRef
 	// For unit testing
@@ -111,14 +107,12 @@ func NewPool(poolReq *PoolRequest) (*Pool, error) {
 	}
 
 	pool := &Pool{
-		FQN:           poolReq.FQN,
-		Name:          poolReq.Name,
-		UUID:          uuid.Variant4().String(),
-		Type:          poolReq.Type,
-		defaultSubnet: SubnetKey(poolReq.Subnet),
-		TestOnly:      poolReq.TestOnly,
+		FQN:      poolReq.FQN,
+		Name:     poolReq.Name,
+		UUID:     uuid.Variant4().String(),
+		Type:     poolReq.Type,
+		TestOnly: poolReq.TestOnly,
 	}
-	pool.Subnets = make(map[SubnetKey]*SubnetData)
 
 	subnetData := &SubnetData{}
 
@@ -130,7 +124,7 @@ func NewPool(poolReq *PoolRequest) (*Pool, error) {
 	subnetData.Addresses = allocateBitVector(poolReq.maxSubnets)
 
 	// currently, we support only one subnet per pool which is marked as the default
-	pool.Subnets[pool.defaultSubnet] = subnetData
+	pool.Subnets = subnetData
 	return pool, nil
 }
 
@@ -140,17 +134,8 @@ func (p *Pool) ReserveSubnet(subnetReq *SubnetRequest) (*net.IPNet, error) {
 	if err != nil {
 		return nil, err
 	}
-	var k SubnetKey
-	if subnetReq.Subnet == "" {
-		k = p.defaultSubnet
-	} else {
-		k = SubnetKey(subnetReq.Subnet)
-	}
-	data, ok := p.Subnets[k]
-	if !ok {
-		return nil, fmt.Errorf("No %s subnet found in pool %s/%s ", subnetReq.Subnet, p.FQN, p.UUID)
-	}
-	net, err := p.internalReserveSubnet(data)
+
+	net, err := p.internalReserveSubnet(p.Subnets)
 	return net, nil
 }
 
@@ -186,22 +171,14 @@ func (p *Pool) FreeSubnet(subnetReq *SubnetRequest) error {
 	if err != nil {
 		return err
 	}
-	var k SubnetKey
 	if subnetReq.Type == PRIVATE_NETWORK {
-		if subnetReq.Subnet == "" {
-			k = p.defaultSubnet
-		} else {
-			k = SubnetKey(subnetReq.Subnet)
-		}
+		// Nothing to do here yet... perhaps remove NetworkRef
 	} else {
-		// we need to mask out the subnet bits so we only have the original prefix left which is the actual SubnetKey
 
 	}
-	data, ok := p.Subnets[k]
-	if !ok {
-		return fmt.Errorf("No %s subnet found in pool %s/%s ", subnetReq.Subnet, p.FQN, p.UUID)
-	}
-	err = p.internalFreeSubnet(data, subnetReq.Subnet)
+	// TODO(awander): add a check that subnetReq.Subnet is within range of
+	// p.Subnets.Prefix (use net.Contains())
+	err = p.internalFreeSubnet(p.Subnets, subnetReq.Subnet)
 	return nil
 }
 
@@ -222,7 +199,7 @@ func (p *Pool) internalFreeSubnet(data *SubnetData, subnetStr string) error {
 		return fmt.Errorf("Internal error: offset %v exceeds subnet size of %v", offset, data.Addresses.Length)
 	}
 
-	fmt.Printf("found subnet offset: %v value: %v", offset, bv.Get(offset))
+	// fmt.Printf("found subnet offset: %v value: %v", offset, bv.Get(offset))
 	// set the bit in the bitvector to 0 to mark it as free
 	bv.Set(0, offset)
 

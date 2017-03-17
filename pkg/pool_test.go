@@ -86,7 +86,7 @@ func TestSubnetData(t *testing.T) {
 		if err != nil {
 			t.Fatalf("InitPool failed: %s", err)
 		}
-		res := pool.Subnets[pool.defaultSubnet]
+		res := pool.Subnets
 		if !res.Prefix.Equal(tt.out.Prefix) {
 			t.Errorf("expect %v got %v ", tt.out.Prefix, res.Prefix)
 		}
@@ -105,7 +105,7 @@ func TestSubnetData(t *testing.T) {
 	}
 }
 
-func TestReserveSubnet(t *testing.T) {
+func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 
 	pools, err := createTestPools()
 	if err != nil {
@@ -168,6 +168,7 @@ func TestReserveSubnet(t *testing.T) {
 		}
 	}
 
+	// Free the Subnet we allocated above
 	var tests_freeSubnet = []struct {
 		in_subnet      *SubnetRequest
 		in_testPoolIdx int
@@ -180,7 +181,7 @@ func TestReserveSubnet(t *testing.T) {
 		{&SubnetRequest{tests[4].out.String(), SHARED_NETWORK}, tests[4].in_testPoolIdx, 2},
 	}
 	for _, tt := range tests_freeSubnet {
-		bv := pools[tt.in_testPoolIdx].Subnets[pools[tt.in_testPoolIdx].defaultSubnet].Addresses
+		bv := pools[tt.in_testPoolIdx].Subnets.Addresses
 		if bv.Get(tt.out_offset) != 1 {
 			t.Errorf("for input %+v expectd bit at position %v to be 1 (set) but it's %v", tt, tt.out_offset, bv.Get(tt.out_offset))
 		}

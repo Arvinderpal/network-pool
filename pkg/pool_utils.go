@@ -4,7 +4,6 @@ import "net"
 
 // generates a subnet from the specified prefix and subnet bits
 func computeSubnetFromOffset(prefix net.IP, prefixLength, subnetLength int, subnetBits uint32) net.IP {
-
 	ipUInt32 := packIPv4IntoUint32(prefix)
 	ipUInt32 = packBits(ipUInt32, prefixLength, subnetBits, subnetLength)
 	return unpackUint32ToIPv4(ipUInt32)
@@ -12,7 +11,14 @@ func computeSubnetFromOffset(prefix net.IP, prefixLength, subnetLength int, subn
 
 // generates a mask of the specified length
 func computeSubnetMask(length int) net.IPMask {
-	return unpackUint32ToIPv4Mask(uint32(0xFFFFFFFF) << uint(length))
+	return unpackUint32ToIPv4Mask(uint32(0xFFFFFFFF) << uint(32-length))
+}
+
+func computeOffsetFromSubnet(ip net.IP, prefixLength, subnetLength int) uint {
+	tmpOffsetU32 := packIPv4IntoUint32(ip)
+	var subnetMask uint32
+	subnetMask = (0xFFFFFFFF << uint(prefixLength)) >> uint(prefixLength)
+	return uint((tmpOffsetU32 & subnetMask) >> uint(32-(prefixLength+subnetLength)))
 }
 
 func packIPv4IntoUint32(ip net.IP) uint32 {

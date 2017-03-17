@@ -139,7 +139,7 @@ func TestReserveSubnet(t *testing.T) {
 			1, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("128.0.0.0"),
-				Mask: net.IPv4Mask(0xff, 0xff, 0x0, 0x0)},
+				Mask: net.IPv4Mask(0xff, 0x80, 0x0, 0x0)},
 		},
 		{
 			&SubnetRequest{
@@ -147,7 +147,7 @@ func TestReserveSubnet(t *testing.T) {
 			1, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("128.128.0.0"),
-				Mask: net.IPv4Mask(0xff, 0xff, 0x0, 0x0)},
+				Mask: net.IPv4Mask(0xff, 0x80, 0x0, 0x0)},
 		},
 		{
 			&SubnetRequest{
@@ -155,7 +155,7 @@ func TestReserveSubnet(t *testing.T) {
 			1, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("129.0.0.0"),
-				Mask: net.IPv4Mask(0xff, 0xff, 0x0, 0x0)},
+				Mask: net.IPv4Mask(0xff, 0x80, 0x0, 0x0)},
 		},
 	}
 
@@ -163,11 +163,34 @@ func TestReserveSubnet(t *testing.T) {
 		subnet, err := pools[tt.in_testPoolIdx].ReserveSubnet(tt.in_subnetReq)
 		if err != nil {
 			t.Errorf("error: %s", err)
-		} else if !subnet.IP.Equal(tt.out.IP) {
+		} else if !subnet.IP.Equal(tt.out.IP) || subnet.Mask.String() != tt.out.Mask.String() {
 			t.Errorf("for input %+v expectd %s got %s", tt, tt.out, subnet)
 		}
 	}
 
+	var tests_freeSubnet = []struct {
+		in_subnet      *SubnetRequest
+		in_testPoolIdx int
+		out_offset     uint
+	}{
+		{&SubnetRequest{tests[0].out.String(), SHARED_NETWORK}, tests[0].in_testPoolIdx, 0},
+		{&SubnetRequest{tests[1].out.String(), SHARED_NETWORK}, tests[1].in_testPoolIdx, 1},
+		{&SubnetRequest{tests[2].out.String(), SHARED_NETWORK}, tests[2].in_testPoolIdx, 0},
+		{&SubnetRequest{tests[3].out.String(), SHARED_NETWORK}, tests[3].in_testPoolIdx, 1},
+		{&SubnetRequest{tests[4].out.String(), SHARED_NETWORK}, tests[4].in_testPoolIdx, 2},
+	}
+	for _, tt := range tests_freeSubnet {
+		bv := pools[tt.in_testPoolIdx].Subnets[pools[tt.in_testPoolIdx].defaultSubnet].Addresses
+		if bv.Get(tt.out_offset) != 1 {
+			t.Errorf("for input %+v expectd bit at position %v to be 1 (set) but it's %v", tt, tt.out_offset, bv.Get(tt.out_offset))
+		}
+		err := pools[tt.in_testPoolIdx].FreeSubnet(tt.in_subnet)
+		if err != nil {
+			t.Errorf("error: %s", err)
+		} else if bv.Get(tt.out_offset) != 0 {
+			t.Errorf("for input %+v expectd bit at position %v to be 0 (unset) but it's %v", tt, tt.out_offset, bv.Get(tt.out_offset))
+		}
+	}
 }
 
 func TestComputeSubnetFromOffset(t *testing.T) {
@@ -196,7 +219,37 @@ func TestComputeSubnetFromOffset(t *testing.T) {
 	for _, tt := range tests {
 		subnet := computeSubnetFromOffset(tt.in_prefix, tt.in_prefixLen, tt.in_subnetLen, tt.in_subnetBits)
 		if !subnet.Equal(tt.out) {
-			t.Errorf("for input %+v expectd %s got %s", tt, tt.out, subnet)
+			t.Errorf("for input %v expectd %s got %s", tt, tt.out, subnet)
+		}
+	}
+}
+
+func TestComputeOffsetFromSubnet(t *testing.T) {
+
+	var tests = []struct {
+		in_subnet    net.IP
+		in_prefixLen int
+		in_subnetLen int
+		out          int
+	}{
+		{net.ParseIP("192.168.42.0"), 16, 8, 42},
+		{net.ParseIP("192.168.128.0"), 16, 9, 256},
+		{net.ParseIP("192.168.128.128"), 16, 9, 257},
+		{net.ParseIP("192.168.127.128"), 16, 9, 255},
+		{net.ParseIP("172.169.129.0"), 20, 4, 1},
+		{net.ParseIP("172.169.130.0"), 20, 4, 2},
+		{net.ParseIP("172.169.136.0"), 20, 4, 8},
+		{net.ParseIP("172.169.128.128"), 20, 5, 1},
+		{net.ParseIP("172.169.129.0"), 20, 5, 2},
+		{net.ParseIP("254.0.64.0"), 7, 11, 1},
+		{net.ParseIP("255.255.192.0"), 7, 11, 2047},
+		{net.ParseIP("255.255.128.0"), 7, 11, 2046},
+		{net.ParseIP("10.0.0.0"), 8, 8, 0},
+	}
+	for _, tt := range tests {
+		offset := computeOffsetFromSubnet(tt.in_subnet, tt.in_prefixLen, tt.in_subnetLen)
+		if tt.out != int(offset) {
+			t.Errorf("for input %+v expectd %v got %v", tt, tt.out, offset)
 		}
 	}
 }

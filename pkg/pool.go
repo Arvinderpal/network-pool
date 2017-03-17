@@ -73,8 +73,8 @@ type SubnetKey string
 // SubnetData for each subnet associated with this pool.
 // Currently, we only support a single prefix/subnet per pool:
 // e.g. 192.168.0.0/16. In the case of shared networks, this is further
-// carved into smaller ranges for use by individual networks. In the case
-// of private networks, all networks will use the 192.168.0.0/16 subnet.
+// carved into smaller ranges for use by individual networks. In the above
+// example, all private networks will use the 192.168.0.0/16 subnet.
 // In the future, we may support multiple prefixes/subnets per pool.
 // e.g. 192.168.0.0/16, 10.0.0.0/8 ... thus the SubnetKey is defined and
 // a map is used inside the Pool object.
@@ -109,8 +109,6 @@ func NewPool(poolReq *PoolRequest) (*Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Printf("Creating New Pool %s\n", poolReq.Name)
 
 	pool := &Pool{
 		FQN:           poolReq.FQN,
@@ -164,7 +162,6 @@ func (p *Pool) internalReserveSubnet(data *SubnetData) (*net.IPNet, error) {
 	if offset < 0 {
 		return nil, &ipam.ErrNoAvailableSubnet{}
 	}
-	fmt.Printf("found free subnet. offset: %v\n", offset)
 
 	reserveSubnet := computeSubnetFromOffset(data.Prefix,
 		data.PrefixBitsLength,
@@ -176,7 +173,7 @@ func (p *Pool) internalReserveSubnet(data *SubnetData) (*net.IPNet, error) {
 		IP:   reserveSubnet,
 		Mask: subnetMask,
 	}
-	fmt.Printf("Reserved Subnet Address %v , mask %v\n", subnetAddress, subnetMask)
+	// fmt.Printf("Reserved Subnet Address %v , mask %v\n", subnetAddress, subnetMask)
 
 	// set the bit in the bitvector to mark reservation
 	bv.Set(1, uint(offset))
@@ -189,6 +186,45 @@ func (p *Pool) FreeSubnet(subnetReq *SubnetRequest) error {
 	if err != nil {
 		return err
 	}
+	var k SubnetKey
+	if subnetReq.Type == PRIVATE_NETWORK {
+		if subnetReq.Subnet == "" {
+			k = p.defaultSubnet
+		} else {
+			k = SubnetKey(subnetReq.Subnet)
+		}
+	} else {
+		// we need to mask out the subnet bits so we only have the original prefix left which is the actual SubnetKey
+
+	}
+	data, ok := p.Subnets[k]
+	if !ok {
+		return fmt.Errorf("No %s subnet found in pool %s/%s ", subnetReq.Subnet, p.FQN, p.UUID)
+	}
+	err = p.internalFreeSubnet(data, subnetReq.Subnet)
+	return nil
+}
+
+func (p *Pool) internalFreeSubnet(data *SubnetData, subnetStr string) error {
+
+	bv := data.Addresses
+
+	_, ipnet, _ := net.ParseCIDR(subnetStr) // no error checks; validation already happened in FreeSubnet
+
+	// find the offset in the bitvector for this subnet
+	offset := computeOffsetFromSubnet(
+		ipnet.IP.To16(),
+		data.PrefixBitsLength,
+		data.SubnetBitsLength)
+
+	if offset > uint(data.Addresses.Length) {
+		// TODO(awander): log this error and return ipam.ErrIpamInternalConfigError{}
+		return fmt.Errorf("Internal error: offset %v exceeds subnet size of %v", offset, data.Addresses.Length)
+	}
+
+	fmt.Printf("found subnet offset: %v value: %v", offset, bv.Get(offset))
+	// set the bit in the bitvector to 0 to mark it as free
+	bv.Set(0, offset)
 
 	return nil
 }

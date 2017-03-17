@@ -1,6 +1,10 @@
 package pool
 
-import "net"
+import (
+	"net"
+
+	"github.com/apcera/continuum/util/netutil"
+)
 
 // generates a subnet from the specified prefix and subnet bits
 func computeSubnetFromOffset(prefix net.IP, prefixLength, subnetLength int, subnetBits uint32) net.IP {
@@ -43,4 +47,44 @@ func packBits(org uint32, org_size int, in uint32, in_size int) uint32 {
 	in = in << uint(32-(org_size+in_size))
 	mask = mask << uint(32-(org_size+in_size))
 	return (org | in) & mask
+}
+
+func allocateBitVector(maxNetworks int) *netutil.BitVector {
+	var bytesNeeded int
+	if maxNetworks%8 == 0 {
+		bytesNeeded = maxNetworks / 8
+	} else {
+		bytesNeeded = (maxNetworks / 8) + 1
+	}
+
+	bv := &netutil.BitVector{}
+	bv.Data = make([]byte, bytesNeeded)
+	bv.Length = maxNetworks
+	return bv
+}
+
+// subnetBitsNeeded is a util method to find the number of bits need for the
+// subnet portion of the ipv4 address. for example, if the user desires, 5
+// networks, we will need 3 bits; even with 8 networks, we will need 3 bits;
+// however, if 9 networks are specified, we need 4 bits.
+func subnetBitsNeeded(maxNetworks int) int {
+	bitsNeeded := 0
+	tmp := maxNetworks
+	for {
+		if tmp <= 1 {
+			break
+		}
+		tmp = tmp >> 1
+		bitsNeeded++
+	}
+	tmpMaxNetworks := 1 << uint(bitsNeeded)
+	if maxNetworks <= tmpMaxNetworks {
+		// maxnetworks is an exact power of 2
+		// e.g. maxNetworks=4; we need only need 2 bits to handle this
+		return bitsNeeded
+	} else {
+		// e.g. maxNetworks=5, we need 3 bits to handle this
+		bitsNeeded++
+		return bitsNeeded
+	}
 }

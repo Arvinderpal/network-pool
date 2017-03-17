@@ -25,8 +25,6 @@ func (t PoolType) String() string {
 		return "shared"
 	case PRIVATE_POOL:
 		return "private"
-	case MIX_POOL:
-		return "mix"
 	}
 	return ""
 }
@@ -34,29 +32,10 @@ func (t PoolType) String() string {
 const (
 	SHARED_POOL PoolType = iota
 	PRIVATE_POOL
-	MIX_POOL
-)
-
-type NetworkType int
-
-func (t NetworkType) String() string {
-	switch t {
-	case SHARED_NETWORK:
-		return "shared"
-	case PRIVATE_NETWORK:
-		return "private"
-	}
-	return ""
-}
-
-const (
-	SHARED_NETWORK NetworkType = iota
-	PRIVATE_NETWORK
 )
 
 type SubnetRequest struct {
 	Subnet string // desired subnet if any (or subnet to be freed)
-	Type   NetworkType
 }
 
 type PoolRequest struct {
@@ -78,12 +57,12 @@ type SubnetKey string
 // In the future, we may support multiple prefixes/subnets per pool.
 // e.g. 192.168.0.0/16, 10.0.0.0/8 ...
 type SubnetData struct {
-	Prefix           net.IP
-	PrefixBitsLength int
+	Prefix           net.IP `json:""`
+	PrefixBitsLength int    `json:""`
 	// Bits available for subnet allocation
-	SubnetBitsLength int
+	SubnetBitsLength int `json:""`
 	// Allocated addresses in each subnet
-	Addresses *netutil.BitVector
+	Addresses *netutil.BitVector `json:""`
 }
 
 type Pool struct {
@@ -122,7 +101,6 @@ func NewPool(poolReq *PoolRequest) (*Pool, error) {
 	subnetData.PrefixBitsLength, _ = net.Mask.Size()
 	subnetData.SubnetBitsLength = subnetBitsNeeded(poolReq.maxSubnets)
 	subnetData.Addresses = allocateBitVector(poolReq.maxSubnets)
-
 	// currently, we support only one subnet per pool which is marked as the default
 	pool.Subnets = subnetData
 	return pool, nil
@@ -134,7 +112,14 @@ func (p *Pool) ReserveSubnet(subnetReq *SubnetRequest) (*net.IPNet, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	if p.Type == PRIVATE_POOL {
+		// For private networks, the subnet is the pool prefix (e.g. 10/8)
+		return &net.IPNet{
+			IP:   p.Subnets.Prefix,
+			Mask: computeSubnetMask(p.Subnets.PrefixBitsLength),
+		}, nil
+	}
+	// For shared networks, we need to reserve a subnet
 	net, err := p.internalReserveSubnet(p.Subnets)
 	return net, nil
 }
@@ -158,7 +143,6 @@ func (p *Pool) internalReserveSubnet(data *SubnetData) (*net.IPNet, error) {
 		IP:   reserveSubnet,
 		Mask: subnetMask,
 	}
-	// fmt.Printf("Reserved Subnet Address %v , mask %v\n", subnetAddress, subnetMask)
 
 	// set the bit in the bitvector to mark reservation
 	bv.Set(1, uint(offset))
@@ -171,11 +155,11 @@ func (p *Pool) FreeSubnet(subnetReq *SubnetRequest) error {
 	if err != nil {
 		return err
 	}
-	if subnetReq.Type == PRIVATE_NETWORK {
+	if p.Type == PRIVATE_POOL {
 		// Nothing to do here yet... perhaps remove NetworkRef
-	} else {
-
+		return nil
 	}
+
 	// TODO(awander): add a check that subnetReq.Subnet is within range of
 	// p.Subnets.Prefix (use net.Contains())
 	err = p.internalFreeSubnet(p.Subnets, subnetReq.Subnet)
@@ -208,7 +192,7 @@ func (p *Pool) internalFreeSubnet(data *SubnetData, subnetStr string) error {
 
 func (pi *PoolRequest) validatePoolRequest() error {
 
-	if pi.Type != SHARED_POOL && pi.Type != PRIVATE_POOL && pi.Type != MIX_POOL {
+	if pi.Type != SHARED_POOL && pi.Type != PRIVATE_POOL {
 		return fmt.Errorf("Unknown pool type %s", pi.Type)
 	}
 
@@ -217,8 +201,10 @@ func (pi *PoolRequest) validatePoolRequest() error {
 		return &ipam.ErrInvalidSubnet{}
 	}
 
-	if pi.maxSubnets > maxNetSize || pi.maxSubnets <= 0 {
-		return fmt.Errorf("Maximum networks per pool must be lesss than %d and greather than 0; %d requested", maxNetSize, pi.maxSubnets)
+	if pi.Type == SHARED_POOL {
+		if pi.maxSubnets > maxNetSize || pi.maxSubnets <= 0 {
+			return fmt.Errorf("Maximum networks per pool must be lesss than %d and greather than 0; %d requested", maxNetSize, pi.maxSubnets)
+		}
 	}
 
 	// FQN
@@ -234,9 +220,6 @@ func (pi *PoolRequest) validatePoolRequest() error {
 }
 
 func (s *SubnetRequest) validateSubnetRequest() error {
-	if s.Type != SHARED_NETWORK && s.Type != PRIVATE_NETWORK {
-		return fmt.Errorf("Unknown network type %s", s.Type)
-	}
 	if s.Subnet != "" {
 		_, net, err := net.ParseCIDR(s.Subnet)
 		if err != nil || net == nil {
@@ -244,44 +227,4 @@ func (s *SubnetRequest) validateSubnetRequest() error {
 		}
 	}
 	return nil
-}
-
-func allocateBitVector(maxNetworks int) *netutil.BitVector {
-	var bytesNeeded int
-	if maxNetworks%8 == 0 {
-		bytesNeeded = maxNetworks / 8
-	} else {
-		bytesNeeded = (maxNetworks / 8) + 1
-	}
-
-	bv := &netutil.BitVector{}
-	bv.Data = make([]byte, bytesNeeded)
-	bv.Length = maxNetworks
-	return bv
-}
-
-// subnetBitsNeeded is a util method to find the number of bits need for the
-// subnet portion of the ipv4 address. for example, if the user desires, 5
-// networks, we will need 3 bits; even with 8 networks, we will need 3 bits;
-// however, if 9 networks are specified, we need 4 bits.
-func subnetBitsNeeded(maxNetworks int) int {
-	bitsNeeded := 0
-	tmp := maxNetworks
-	for {
-		if tmp <= 1 {
-			break
-		}
-		tmp = tmp >> 1
-		bitsNeeded++
-	}
-	tmpMaxNetworks := 1 << uint(bitsNeeded)
-	if maxNetworks <= tmpMaxNetworks {
-		// maxnetworks is an exact power of 2
-		// e.g. maxNetworks=4; we need only need 2 bits to handle this
-		return bitsNeeded
-	} else {
-		// e.g. maxNetworks=5, we need 3 bits to handle this
-		bitsNeeded++
-		return bitsNeeded
-	}
 }

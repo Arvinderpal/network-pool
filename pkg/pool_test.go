@@ -8,13 +8,15 @@ import (
 	"github.com/apcera/continuum/util/netutil"
 )
 
+// NOTE: don't modify these values. The tests below depend on them.
+// It should be however safe to append new entries to the end.
 var testPoolReqs = []struct {
 	preq *PoolRequest
 }{
 	{
 		&PoolRequest{
-			FQN:        fqn.Build(POOL_RESOURCE, "::", "pool-0"),
-			Name:       "pool-0",
+			FQN:        fqn.Build(POOL_RESOURCE, "::", "pool-shared-0"),
+			Name:       "pool-shared-0",
 			Subnet:     "10.0.0.0/8",
 			maxSubnets: 129,
 			Type:       SHARED_POOL,
@@ -23,12 +25,30 @@ var testPoolReqs = []struct {
 	},
 	{
 		&PoolRequest{
-			FQN:        fqn.Build(POOL_RESOURCE, "::", "pool-1"),
-			Name:       "pool-1",
+			FQN:        fqn.Build(POOL_RESOURCE, "::", "pool-shared-1"),
+			Name:       "pool-shared-1",
 			Subnet:     "128.0.0.0/7",
 			maxSubnets: 3,
 			Type:       SHARED_POOL,
 			TestOnly:   true,
+		},
+	},
+	{
+		&PoolRequest{
+			FQN:      fqn.Build(POOL_RESOURCE, "::", "pool-private-0"),
+			Name:     "pool-private-1",
+			Subnet:   "10.0.0.0/8",
+			Type:     PRIVATE_POOL,
+			TestOnly: true,
+		},
+	},
+	{
+		&PoolRequest{
+			FQN:      fqn.Build(POOL_RESOURCE, "::", "pool-private-1"),
+			Name:     "pool-private-1",
+			Subnet:   "128.0.0.0/7",
+			Type:     PRIVATE_POOL,
+			TestOnly: true,
 		},
 	},
 }
@@ -105,7 +125,7 @@ func TestSubnetData(t *testing.T) {
 	}
 }
 
-func TestReserveSubnetAndFreeSubnet(t *testing.T) {
+func TestReserveAndFreeSubnet_Shared(t *testing.T) {
 
 	pools, err := createTestPools()
 	if err != nil {
@@ -119,7 +139,7 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 	}{
 		{
 			&SubnetRequest{
-				Subnet: "", Type: SHARED_NETWORK},
+				Subnet: ""},
 			0, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("10.0.0.0"),
@@ -127,7 +147,7 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 		},
 		{
 			&SubnetRequest{
-				Subnet: "", Type: SHARED_NETWORK},
+				Subnet: ""},
 			0, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("10.1.0.0"),
@@ -135,7 +155,7 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 		},
 		{
 			&SubnetRequest{
-				Subnet: "", Type: SHARED_NETWORK},
+				Subnet: ""},
 			1, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("128.0.0.0"),
@@ -143,7 +163,7 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 		},
 		{
 			&SubnetRequest{
-				Subnet: "", Type: SHARED_NETWORK},
+				Subnet: ""},
 			1, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("128.128.0.0"),
@@ -151,7 +171,7 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 		},
 		{
 			&SubnetRequest{
-				Subnet: "", Type: SHARED_NETWORK},
+				Subnet: ""},
 			1, // in_testPoolIdx
 			&net.IPNet{
 				IP:   net.ParseIP("129.0.0.0"),
@@ -168,17 +188,17 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 		}
 	}
 
-	// Free the Subnet we allocated above
+	// Free the Subnets we allocated above
 	var tests_freeSubnet = []struct {
 		in_subnet      *SubnetRequest
 		in_testPoolIdx int
 		out_offset     uint
 	}{
-		{&SubnetRequest{tests[0].out.String(), SHARED_NETWORK}, tests[0].in_testPoolIdx, 0},
-		{&SubnetRequest{tests[1].out.String(), SHARED_NETWORK}, tests[1].in_testPoolIdx, 1},
-		{&SubnetRequest{tests[2].out.String(), SHARED_NETWORK}, tests[2].in_testPoolIdx, 0},
-		{&SubnetRequest{tests[3].out.String(), SHARED_NETWORK}, tests[3].in_testPoolIdx, 1},
-		{&SubnetRequest{tests[4].out.String(), SHARED_NETWORK}, tests[4].in_testPoolIdx, 2},
+		{&SubnetRequest{tests[0].out.String()}, tests[0].in_testPoolIdx, 0},
+		{&SubnetRequest{tests[1].out.String()}, tests[1].in_testPoolIdx, 1},
+		{&SubnetRequest{tests[2].out.String()}, tests[2].in_testPoolIdx, 0},
+		{&SubnetRequest{tests[3].out.String()}, tests[3].in_testPoolIdx, 1},
+		{&SubnetRequest{tests[4].out.String()}, tests[4].in_testPoolIdx, 2},
 	}
 	for _, tt := range tests_freeSubnet {
 		bv := pools[tt.in_testPoolIdx].Subnets.Addresses
@@ -190,6 +210,88 @@ func TestReserveSubnetAndFreeSubnet(t *testing.T) {
 			t.Errorf("error: %s", err)
 		} else if bv.Get(tt.out_offset) != 0 {
 			t.Errorf("for input %+v expectd bit at position %v to be 0 (unset) but it's %v", tt, tt.out_offset, bv.Get(tt.out_offset))
+		}
+	}
+}
+
+func TestReserveAndFreeSubnet_Private(t *testing.T) {
+
+	pools, err := createTestPools()
+	if err != nil {
+		t.Fatalf("createTestPools failed: %s", err)
+	}
+
+	var tests = []struct {
+		in_subnetReq   *SubnetRequest
+		in_testPoolIdx int
+		out            *net.IPNet
+	}{
+		{
+			&SubnetRequest{
+				Subnet: ""},
+			2, // in_testPoolIdx
+			&net.IPNet{
+				IP:   net.ParseIP("10.0.0.0"),
+				Mask: net.IPv4Mask(0xff, 0x00, 0x0, 0x0)},
+		},
+		{
+			&SubnetRequest{
+				Subnet: ""},
+			2, // in_testPoolIdx
+			&net.IPNet{
+				IP:   net.ParseIP("10.0.0.0"),
+				Mask: net.IPv4Mask(0xff, 0x00, 0x0, 0x0)},
+		},
+		{
+			&SubnetRequest{
+				Subnet: ""},
+			3, // in_testPoolIdx
+			&net.IPNet{
+				IP:   net.ParseIP("128.0.0.0"),
+				Mask: net.IPv4Mask(0xfe, 0x00, 0x0, 0x0)},
+		},
+		{
+			&SubnetRequest{
+				Subnet: ""},
+			3, // in_testPoolIdx
+			&net.IPNet{
+				IP:   net.ParseIP("128.0.0.0"),
+				Mask: net.IPv4Mask(0xfe, 0x00, 0x0, 0x0)},
+		},
+		{
+			&SubnetRequest{
+				Subnet: ""},
+			3, // in_testPoolIdx
+			&net.IPNet{
+				IP:   net.ParseIP("128.0.0.0"),
+				Mask: net.IPv4Mask(0xfe, 0x00, 0x0, 0x0)},
+		},
+	}
+
+	for _, tt := range tests {
+		subnet, err := pools[tt.in_testPoolIdx].ReserveSubnet(tt.in_subnetReq)
+		if err != nil {
+			t.Errorf("error: %s", err)
+		} else if !subnet.IP.Equal(tt.out.IP) || subnet.Mask.String() != tt.out.Mask.String() {
+			t.Errorf("for input %+v expectd %s got %s", tt, tt.out, subnet)
+		}
+	}
+
+	// Free the Subnets we allocated above
+	var tests_freeSubnet = []struct {
+		in_subnet      *SubnetRequest
+		in_testPoolIdx int
+	}{
+		{&SubnetRequest{tests[0].out.String()}, tests[0].in_testPoolIdx},
+		{&SubnetRequest{tests[1].out.String()}, tests[1].in_testPoolIdx},
+		{&SubnetRequest{tests[2].out.String()}, tests[2].in_testPoolIdx},
+		{&SubnetRequest{tests[3].out.String()}, tests[3].in_testPoolIdx},
+		{&SubnetRequest{tests[4].out.String()}, tests[4].in_testPoolIdx},
+	}
+	for _, tt := range tests_freeSubnet {
+		err := pools[tt.in_testPoolIdx].FreeSubnet(tt.in_subnet)
+		if err != nil {
+			t.Errorf("error: %s", err)
 		}
 	}
 }
